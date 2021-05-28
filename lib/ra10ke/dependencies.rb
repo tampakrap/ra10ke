@@ -1,4 +1,36 @@
 module Ra10ke::Dependencies
+  @@version_formats = {}
+
+  # Registers a block that finds the latest version.
+  # The block will be called with a list of tags.
+  # If the block returns nil the next format will be tried.
+  def self.register_version_format(name, &block)
+    @@version_formats[name] = block
+  end
+
+  # semver is the default version format.
+  register_version_format(:semver) do |tags|
+    latest_tag = tags.map do |tag|
+      begin
+        Semverse::Version.new tag[/\Av?(.*)\Z/, 1]
+      rescue Semverse::InvalidVersionFormat
+        # ignore tags that do not comply to semver
+        nil
+      end
+    end.select { |tag| !tag.nil? }.sort.last.to_s.downcase
+    latest_ref = tags.detect { |tag| tag[/\Av?(.*)\Z/, 1] == latest_tag }
+  end
+
+  def get_latest_ref(remote_refs)
+    tags = remote_refs['tags'].keys
+    latest_ref = @@version_formats.detect do |name, block|
+      latest_ref = block.call(tags)
+      break latest_ref unless latest_ref.nil?
+    end
+    latest_ref = 'undef (tags do not follow any known pattern)' if latest_ref.nil?
+    latest_ref
+  end
+
   def define_task_dependencies(*_args)
     desc "Print outdated forge modules"
     task :dependencies do
@@ -44,17 +76,10 @@ module Ra10ke::Dependencies
             # we have to be be opinionated here
             # so semantic versioning (vX.Y.Z) it is for us
             # as well as support for skipping the leading v letter
-            tags = remote_refs['tags'].keys
-            latest_tag = tags.map do |tag|
-              begin
-                Semverse::Version.new tag[/\Av?(.*)\Z/, 1]
-              rescue Semverse::InvalidVersionFormat
-                # ignore tags that do not comply to semver
-                nil
-              end
-            end.select { |tag| !tag.nil? }.sort.last.to_s.downcase
-            latest_ref = tags.detect { |tag| tag[/\Av?(.*)\Z/, 1] == latest_tag }
-            latest_ref = 'undef (tags do not match semantic versioning)' if latest_ref.nil?
+            #
+            # register own version formats with
+            # Ra10ke::Dependencies.register_version_format(:name, &block)
+            latest_ref = get_latest_ref(remote_refs)
           elsif ref.match(/^[a-z0-9]{40}$/)
             # for sha just assume head should be tracked
             latest_ref = remote_refs['head'][:sha]
@@ -66,6 +91,5 @@ module Ra10ke::Dependencies
         end
       end
     end
-
   end
 end
